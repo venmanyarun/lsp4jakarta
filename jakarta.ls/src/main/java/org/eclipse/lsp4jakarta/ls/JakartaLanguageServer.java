@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright (c) 2020, 2024 IBM Corporation and others.
+* Copyright (c) 2020, 2026 IBM Corporation and others.
 *
 * This program and the accompanying materials are made available under the
 * terms of the Eclipse Public License v. 2.0 which is available at
@@ -37,6 +37,7 @@ import org.eclipse.lsp4jakarta.commons.ProjectLabelInfoEntry;
 import org.eclipse.lsp4jakarta.ls.api.JakartaJavaFileInfoProvider;
 import org.eclipse.lsp4jakarta.ls.api.JakartaJavaProjectLabelsProvider;
 import org.eclipse.lsp4jakarta.ls.api.JakartaLanguageClientAPI;
+import org.eclipse.lsp4jakarta.ls.api.JakartaLanguageServerAPI;
 import org.eclipse.lsp4jakarta.ls.commons.ParentProcessWatcher.ProcessLanguageServer;
 import org.eclipse.lsp4jakarta.ls.commons.client.ExtendedClientCapabilities;
 import org.eclipse.lsp4jakarta.ls.commons.client.InitializationOptionsExtendedClientCapabilities;
@@ -52,7 +53,7 @@ import org.eclipse.lsp4jakarta.settings.capabilities.ServerCapabilitiesInitializ
 /**
  * Jakarta Language server.
  */
-public class JakartaLanguageServer implements LanguageServer, ProcessLanguageServer, JakartaJavaProjectLabelsProvider, JakartaJavaFileInfoProvider {
+public class JakartaLanguageServer implements JakartaLanguageServerAPI {
 
     private Integer parentProcessId;
 

@@ -1,0 +1,8 @@
+# MCP Tool classes - no interface required, just annotate methods with @Tool
+com.redhat.lsp4j.mcp.tools.lsp.LspGetDiagnosticsTool
+com.redhat.lsp4j.mcp.tools.lsp.LspGetCodeActionsTool
+# Generic LSP tools (provided by lsp4j-mcp)
+
+# Jakarta-specific tools
+org.eclipse.lsp4jakarta.ls.mcp.tools.JakartaValidateAnnotationsTool
+org.eclipse.lsp4jakarta.ls.mcp.tools.JakartaGetQuickFixesTool

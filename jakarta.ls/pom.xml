@@ -33,6 +33,9 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <lsp4j.version>0.23.1</lsp4j.version>
+        <lsp4j.mcp.version>0.1.0-SNAPSHOT</lsp4j.mcp.version>
+        <mcp.version>2.0.0-M2</mcp.version>
+        <undertow.version>2.3.17.Final</undertow.version>
         <releases.repo.id>repo.eclipse.org</releases.repo.id>
         <releases.repo.url>https://repo.eclipse.org/content/repositories/lsp4jakarta-releases/</releases.repo.url>
         <snapshots.repo.id>repo.eclipse.org</snapshots.repo.id>
@@ -66,6 +69,39 @@
             <artifactId>org.eclipse.lsp4jakarta.jdt.core</artifactId>
             <version>0.2.6-SNAPSHOT</version>
         </dependency>
+        <!-- LSP4J MCP Integration -->
+        <dependency>
+            <groupId>com.redhat.lsp4j</groupId>
+            <artifactId>lsp4j-mcp</artifactId>
+            <version>${lsp4j.mcp.version}</version>
+        </dependency>
+        <!-- MCP Java SDK -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${mcp.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.datatype</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-json-jackson3</artifactId>
+            <version>${mcp.version}</version>
+        </dependency>
+        <!-- Undertow for HTTP/SSE -->
+        <dependency>
+            <groupId>io.undertow</groupId>
+            <artifactId>undertow-servlet</artifactId>
+            <version>${undertow.version}</version>
+        </dependency>
     </dependencies>
     <pluginRepositories>
         <pluginRepository>
@@ -91,9 +127,9 @@
                                     <mainClass>org.eclipse.lsp4jakarta.ls.JakartaLanguageServerLauncher</mainClass>
                                 </manifest>
                             </archive>
-                            <descriptorRefs>
-                                <descriptorRef>jar-with-dependencies</descriptorRef>
-                            </descriptorRefs>
+                            <descriptors>
+                                <descriptor>src/assembly/distribution.xml</descriptor>
+                            </descriptors>
                         </configuration>
                     </execution>
                 </executions>
