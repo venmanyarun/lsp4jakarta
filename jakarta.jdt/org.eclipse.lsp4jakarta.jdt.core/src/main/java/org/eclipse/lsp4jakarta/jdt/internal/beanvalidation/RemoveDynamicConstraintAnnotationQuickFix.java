@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright (c) 2023, 2025 IBM Corporation and others.
+* Copyright (c) 2023, 2026 IBM Corporation and others.
 *
 * This program and the accompanying materials are made available under the
 * terms of the Eclipse Public License v. 2.0 which is available at
@@ -129,10 +129,36 @@ public class RemoveDynamicConstraintAnnotationQuickFix implements IJavaCodeActio
      */
     @SuppressWarnings("restriction")
     protected static IBinding getBinding(ASTNode node) {
-        if (node.getParent() instanceof VariableDeclarationFragment) {
-            return ((VariableDeclarationFragment) node.getParent()).resolveBinding();
+        // For TYPE_USE annotations within generic type arguments (e.g., List<@Min(1) String>),
+        // we need to traverse up the AST to find the actual field/method/parameter declaration
+        ASTNode current = node;
+        while (current != null) {
+            // Check if we've reached a VariableDeclarationFragment (field)
+            if (current instanceof VariableDeclarationFragment) {
+                return ((VariableDeclarationFragment) current).resolveBinding();
+            }
+
+            // Check if parent is VariableDeclarationFragment
+            if (current.getParent() instanceof VariableDeclarationFragment) {
+                return ((VariableDeclarationFragment) current.getParent()).resolveBinding();
+            }
+
+            // Try to get binding from parent type (handles methods, parameters, etc.)
+            IBinding binding = org.eclipse.jdt.internal.corext.dom.Bindings.getBindingOfParentType(current);
+            if (binding != null) {
+                return binding;
+            }
+
+            // Move up the tree
+            current = current.getParent();
+
+            // Stop if we've gone too far up (reached compilation unit or null)
+            if (current == null || current.getNodeType() == ASTNode.COMPILATION_UNIT) {
+                break;
+            }
         }
 
+        // Fallback to original behavior
         return org.eclipse.jdt.internal.corext.dom.Bindings.getBindingOfParentType(node);
     }
 }

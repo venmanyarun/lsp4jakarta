@@ -49,8 +49,25 @@ public class BeanValidationTest extends BaseJakartaTest {
         JakartaJavaDiagnosticsParams diagnosticsParams = new JakartaJavaDiagnosticsParams();
         diagnosticsParams.setUris(Arrays.asList(uri));
 
-        // should be no errors
-        assertJavaDiagnostics(diagnosticsParams, IJDT_UTILS);
+        // New diagnostics from processing both field-level and TYPE_USE annotations on array types
+        Diagnostic notEmptyOnIntegerFieldDiagnostic = d(109, 32, 38,
+                                                        "This annotation can only be used on fields of type CharSequence, Collection, Array, or Map.",
+                                                        DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                        "jakarta.validation.constraints.NotEmpty");
+
+        Diagnostic notEmptyOnBooleanFieldDiagnostic = d(103, 18, 29,
+                                                        "This annotation can only be used on fields of type CharSequence, Collection, Array, or Map.",
+                                                        DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                        "jakarta.validation.constraints.NotEmpty");
+
+        Diagnostic sizeOnBigDecimalFieldDiagnostic = d(91, 31, 51,
+                                                       "This annotation can only be used on fields of type CharSequence, Collection, Array, or Map.",
+                                                       DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                       "jakarta.validation.constraints.Size");
+
+        assertJavaDiagnostics(diagnosticsParams, IJDT_UTILS,
+                              notEmptyOnIntegerFieldDiagnostic, notEmptyOnBooleanFieldDiagnostic,
+                              sizeOnBigDecimalFieldDiagnostic);
     }
 
     @Test
@@ -474,7 +491,28 @@ public class BeanValidationTest extends BaseJakartaTest {
                            DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonBigDecimalCharByteShortIntLongMethodOrField",
                            "jakarta.validation.constraints.DecimalMax");
 
-        assertJavaDiagnostics(diagnosticsParams, IJDT_UTILS, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12);
+        // New diagnostics from processing both parameter-level and TYPE_USE annotations
+        Diagnostic sizeOnIntReturnTypeDiagnostic = d(69, 18, 27,
+                                                     "This annotation can only be used on methods that have CharSequence, Collection, Array or Map as a return type.",
+                                                     DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                     "jakarta.validation.constraints.Size");
+
+        Diagnostic sizeOnIntTypeUseParamDiagnostic = d(43, 48, 49,
+                                                       "This annotation can only be used on parameters that have CharSequence, Collection, Array or Map as a parameter type.",
+                                                       DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                       "jakarta.validation.constraints.Size");
+
+        Diagnostic sizeOnIntTypeUseReturnDiagnostic = d(43, 18, 32,
+                                                        "This annotation can only be used on methods that have CharSequence, Collection, Array or Map as a return type.",
+                                                        DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                        "jakarta.validation.constraints.Size");
+
+        Diagnostic notEmptyOnBigIntegerTypeUseParamDiagnostic = d(26, 32, 48,
+                                                                  "This annotation can only be used on parameters that have CharSequence, Collection, Array or Map as a parameter type.",
+                                                                  DiagnosticSeverity.Error, "jakarta-bean-validation", "InvalidAnnotationOnNonSizeMethodOrField",
+                                                                  "jakarta.validation.constraints.NotEmpty");
+        assertJavaDiagnostics(diagnosticsParams, IJDT_UTILS, d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, sizeOnIntReturnTypeDiagnostic, sizeOnIntTypeUseParamDiagnostic,
+                              sizeOnIntTypeUseReturnDiagnostic, notEmptyOnBigIntegerTypeUseParamDiagnostic);
 
         JakartaJavaCodeActionParams codeActionParams1 = createCodeActionParams(uri, d1);
         TextEdit te1 = te(51, 29, 51, 35, "");

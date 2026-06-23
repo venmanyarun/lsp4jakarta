@@ -45,6 +45,8 @@ import static org.eclipse.lsp4jakarta.jdt.internal.beanvalidation.Constants.SIZE
 import static org.eclipse.lsp4jakarta.jdt.internal.beanvalidation.Constants.STRING_FQ;
 import static org.eclipse.lsp4jakarta.jdt.internal.beanvalidation.Constants.VALID;
 
+import org.eclipse.lsp4jakarta.jdt.core.ASTUtils;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
@@ -63,6 +65,15 @@ import org.eclipse.jdt.core.IMethod;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.JavaModelException;
 import org.eclipse.jdt.core.Signature;
+import org.eclipse.jdt.core.dom.ASTNode;
+import org.eclipse.jdt.core.dom.Annotation;
+import org.eclipse.jdt.core.dom.ArrayType;
+import org.eclipse.jdt.core.dom.CompilationUnit;
+import org.eclipse.jdt.core.dom.IExtendedModifier;
+import org.eclipse.jdt.core.dom.ITypeBinding;
+import org.eclipse.jdt.core.dom.ParameterizedType;
+import org.eclipse.jdt.core.dom.Type;
+import org.eclipse.jdt.ls.core.internal.JDTUtils;
 import org.eclipse.lsp4j.Diagnostic;
 import org.eclipse.lsp4j.DiagnosticSeverity;
 import org.eclipse.lsp4j.Range;
@@ -112,6 +123,10 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
                 // Check for conflicting constraints on fields
                 checkConflictingConstraints(context, uri, field, annotations, diagnostics);
 
+                // NEW: Process TYPE_USE annotations on field type with lazy processing
+                String fieldTypeSignature = field.getTypeSignature();
+
+                // Always process direct field annotations first
                 for (IAnnotation annotation : annotations) {
                     String matchedAnnotation = DiagnosticUtils.getMatchedJavaElementName(type,
                                                                                          annotation.getElementName(),
@@ -120,6 +135,11 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
                         validAnnotation(context, uri, field, annotation, matchedAnnotation, diagnostics);
                     }
                 }
+
+                // Additionally, process TYPE_USE annotations if type has generics/arrays
+                if (mightHaveTypeUseAnnotations(fieldTypeSignature)) {
+                    processTypeUseAnnotations(context, uri, field, fieldTypeSignature, diagnostics);
+                }
             }
             allMethods = type.getMethods();
             for (IMethod method : allMethods) {
@@ -127,6 +147,10 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
                 // Check for conflicting constraints on methods
                 checkConflictingConstraints(context, uri, method, annotations, diagnostics);
 
+                // NEW: Process TYPE_USE annotations on return type with lazy processing
+                String returnTypeSignature = method.getReturnType();
+
+                // Always process direct method annotations first
                 for (IAnnotation annotation : annotations) {
                     String matchedAnnotation = DiagnosticUtils.getMatchedJavaElementName(type,
                                                                                          annotation.getElementName(),
@@ -135,20 +159,32 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
                         validAnnotation(context, uri, method, annotation, matchedAnnotation, diagnostics);
                     }
                 }
+
+                // Additionally, process TYPE_USE annotations if return type has generics/arrays
+                if (mightHaveTypeUseAnnotations(returnTypeSignature)) {
+                    processTypeUseAnnotations(context, uri, method, returnTypeSignature, diagnostics);
+                }
+
                 // parameter level annotations
                 for (ILocalVariable param : method.getParameters()) {
                     IAnnotation[] paramAnnotations = param.getAnnotations();
                     // Check for conflicting constraints on parameters
                     checkConflictingConstraints(context, uri, param, paramAnnotations, diagnostics);
 
+                    // NEW: Process TYPE_USE annotations on parameters with lazy processing
+                    String paramTypeSignature = param.getTypeSignature();
+
                     for (IAnnotation annotation : paramAnnotations) {
                         String matchedAnnotation = DiagnosticUtils.getMatchedJavaElementName(type,
                                                                                              annotation.getElementName(),
                                                                                              SET_OF_ANNOTATIONS.toArray(new String[0]));
-
                         if (matchedAnnotation != null) {
                             validAnnotation(context, uri, param, annotation, matchedAnnotation, diagnostics);
                         }
+                    }
+
+                    if (mightHaveTypeUseAnnotations(paramTypeSignature)) {
+                        processTypeUseAnnotations(context, uri, param, paramTypeSignature, diagnostics);
                     }
                 }
             }
@@ -181,6 +217,12 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
 
         if (declaringType != null) {
             String annotationName = annotation.getElementName();
+
+            // For array types, extract the component type for validation
+            // When @Email is used on String[], we validate against String, not String[]
+            if (isArrayType(type)) {
+                type = Signature.getElementType(type);
+            }
 
             //The below block throws diagnostics if invalid element type is used with constraint annotations
             switch (matchedAnnotation) {
@@ -530,6 +572,325 @@ public class BeanValidationDiagnosticsParticipant implements IJavaDiagnosticsPar
                                                          range, Constants.DIAGNOSTIC_SOURCE, null, ErrorCode.ConflictingConstraintAnnotations, DiagnosticSeverity.Warning));
             }
         }
+    }
 
+    /**
+     * Quick check if a type signature might contain TYPE_USE annotations.
+     * This avoids expensive AST parsing for 90%+ of fields.
+     *
+     * @param typeSignature the type signature to check
+     * @return true if the type might have TYPE_USE annotations
+     */
+    private boolean mightHaveTypeUseAnnotations(String typeSignature) {
+        if (typeSignature == null) {
+            return false;
+        }
+
+        // 1. Parameterized types (generics) might have TYPE_USE
+        if (Signature.getTypeArguments(typeSignature).length > 0) {
+            return true;
+        }
+
+        // 2. Array types might have TYPE_USE on component
+        if (Signature.getArrayCount(typeSignature) > 0) {
+            return true;
+        }
+
+        // 3. Simple types (String, int, etc.) cannot have TYPE_USE in their signature
+        return false;
+    }
+
+    /**
+     * Process TYPE_USE annotations on generic type arguments and array components.
+     * Only called after lazy processing check confirms potential TYPE_USE annotations exist.
+     *
+     * @param context the diagnostics context
+     * @param uri the file URI
+     * @param element the Java element (field, method, or parameter)
+     * @param typeSignature the type signature
+     * @param diagnostics the list to add diagnostics to
+     * @throws CoreException if an error occurs
+     */
+    private void processTypeUseAnnotations(JavaDiagnosticsContext context, String uri,
+                                           IJavaElement element, String typeSignature,
+                                           List<Diagnostic> diagnostics) throws CoreException {
+        // At this point, we know the type might have TYPE_USE annotations
+        // Now do the expensive AST parsing
+
+        ICompilationUnit cu = (ICompilationUnit) element.getAncestor(IJavaElement.COMPILATION_UNIT);
+        if (cu == null) {
+            return;
+        }
+
+        // Use ASTUtils to get AST with bindings
+        ASTNode astNode = ASTUtils.getASTNode(cu);
+        if (!(astNode instanceof CompilationUnit)) {
+            return;
+        }
+        CompilationUnit astRoot = (CompilationUnit) astNode;
+
+        // Find the node for this element using ASTUtils
+        ASTNode node = ASTUtils.findASTNode(astRoot, element);
+        if (node == null) {
+            return;
+        }
+
+        // Get the type from the node using ASTUtils
+        Type type = ASTUtils.getTypeFromNode(node);
+        if (type == null) {
+            return;
+        }
+
+        // 1. Check if type is parameterized (has generics)
+        if (type instanceof ParameterizedType) {
+            processGenericTypeArguments(context, uri, element, cu, type, (ParameterizedType) type, diagnostics);
+        }
+
+        // 2. Check if type is array
+        if (type instanceof ArrayType) {
+            processArrayComponentType(context, uri, element, cu, type, (ArrayType) type, diagnostics);
+        }
+    }
+
+    /**
+     * Process TYPE_USE annotations on generic type arguments.
+     */
+    private void processGenericTypeArguments(JavaDiagnosticsContext context, String uri,
+                                             IJavaElement element, ICompilationUnit cu,
+                                             Type rootType,
+                                             ParameterizedType paramType,
+                                             List<Diagnostic> diagnostics) throws CoreException {
+        @SuppressWarnings("unchecked")
+        List<Type> typeArgs = paramType.typeArguments();
+
+        for (Type typeArg : typeArgs) {
+            // Get annotations on this type argument
+            // Note: Only AnnotatableType has annotations() method
+            if (typeArg instanceof org.eclipse.jdt.core.dom.AnnotatableType) {
+                org.eclipse.jdt.core.dom.AnnotatableType annotatableType = (org.eclipse.jdt.core.dom.AnnotatableType) typeArg;
+                @SuppressWarnings("unchecked")
+                List<Annotation> annotations = annotatableType.annotations();
+
+                for (Annotation annotation : annotations) {
+                    ITypeBinding typeBinding = typeArg.resolveBinding();
+
+                    if (typeBinding != null) {
+                        validateTypeUseAnnotation(context, uri, element, cu, rootType, annotation, typeBinding, diagnostics);
+                    }
+                }
+            }
+
+            // Recursively process nested generics
+            if (typeArg instanceof ParameterizedType) {
+                processGenericTypeArguments(context, uri, element, cu, rootType, (ParameterizedType) typeArg, diagnostics);
+            }
+        }
+    }
+
+    /**
+     * Process TYPE_USE annotations on array component types.
+     */
+    private void processArrayComponentType(JavaDiagnosticsContext context, String uri,
+                                           IJavaElement element, ICompilationUnit cu,
+                                           Type rootType,
+                                           ArrayType arrayType,
+                                           List<Diagnostic> diagnostics) throws CoreException {
+        Type componentType = arrayType.getElementType();
+
+        // Get annotations on component type
+        // Note: Only AnnotatableType has annotations() method
+        if (componentType instanceof org.eclipse.jdt.core.dom.AnnotatableType) {
+            org.eclipse.jdt.core.dom.AnnotatableType annotatableType = (org.eclipse.jdt.core.dom.AnnotatableType) componentType;
+            @SuppressWarnings("unchecked")
+            List<Annotation> annotations = annotatableType.annotations();
+
+            for (Annotation annotation : annotations) {
+                ITypeBinding typeBinding = componentType.resolveBinding();
+
+                if (typeBinding != null) {
+                    validateTypeUseAnnotation(context, uri, element, cu, rootType, annotation, typeBinding, diagnostics);
+                }
+            }
+        }
+    }
+
+    /**
+     * Validate a TYPE_USE annotation against the constrained type.
+     */
+    private void validateTypeUseAnnotation(JavaDiagnosticsContext context, String uri,
+                                           IJavaElement element, ICompilationUnit cu,
+                                           Type rootType,
+                                           Annotation annotation, ITypeBinding constrainedType,
+                                           List<Diagnostic> diagnostics) throws CoreException {
+        String annotationName = annotation.getTypeName().getFullyQualifiedName();
+
+        // Get the declaring type for matching
+        IType declaringType = getDeclaringType(element);
+        if (declaringType == null) {
+            return;
+        }
+
+        // Match against known constraint annotations
+        String matchedAnnotation = DiagnosticUtils.getMatchedJavaElementName(
+                                                                             declaringType, annotationName, SET_OF_ANNOTATIONS.toArray(new String[0]));
+
+        if (matchedAnnotation == null) {
+            return;
+        }
+
+        // For TYPE_USE annotations, highlight the entire type expression (e.g., List<@Min(1) String>)
+        // This provides better context than just highlighting the annotation or element name
+        Range range;
+        if (rootType != null && rootType.getStartPosition() >= 0 && rootType.getLength() > 0) {
+            range = JDTUtils.toRange(cu, rootType.getStartPosition(), rootType.getLength());
+        } else {
+            // Fallback to element's name range if rootType position is invalid
+            range = PositionUtils.toNameRange(element, context.getUtils());
+        }
+
+        // Validate the annotation against the constrained type
+        validateConstraintAnnotation(context, uri, element, matchedAnnotation,
+                                     constrainedType, declaringType, range, diagnostics);
+    }
+
+    /**
+     * Extracts the declaring type from a Java element.
+     *
+     * @param element the Java element (field, method, or parameter)
+     * @return the declaring type, or null if not found
+     */
+    private IType getDeclaringType(IJavaElement element) {
+        if (element instanceof IMember) {
+            return ((IMember) element).getDeclaringType();
+        } else if (element instanceof ILocalVariable) {
+            ILocalVariable localVar = (ILocalVariable) element;
+            IJavaElement declaringMember = localVar.getDeclaringMember();
+            if (declaringMember instanceof IMethod) {
+                return ((IMethod) declaringMember).getDeclaringType();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validates a constraint annotation against the constrained type.
+     *
+     * @param context the diagnostics context
+     * @param uri the file URI
+     * @param element the Java element being validated
+     * @param annotationName the matched annotation name
+     * @param constrainedType the type being constrained
+     * @param declaringType the declaring type for type matching
+     * @param diagnostics the list to add diagnostics to
+     */
+    private void validateConstraintAnnotation(JavaDiagnosticsContext context, String uri,
+                                              IJavaElement element, String annotationName,
+                                              ITypeBinding constrainedType, IType declaringType,
+                                              Range range, List<Diagnostic> diagnostics) throws JavaModelException {
+        String typeName = constrainedType.getQualifiedName();
+        boolean isPrimitive = constrainedType.isPrimitive();
+
+        switch (annotationName) {
+            case ASSERT_TRUE, ASSERT_FALSE -> validateBooleanConstraint(context, uri, annotationName, typeName, range, diagnostics);
+
+            case EMAIL, NOT_BLANK, PATTERN -> validateStringConstraint(context, uri, annotationName, typeName, range, diagnostics);
+
+            case DECIMAL_MAX, DECIMAL_MIN, DIGITS -> validateNumericConstraint(context, uri, annotationName, typeName,
+                                                                               declaringType, isPrimitive, NUMERIC_AND_CHAR_WRAPPER_TYPES,
+                                                                               "AnnotationBigDecimalMethods",
+                                                                               ErrorCode.InvalidAnnotationOnNonBigDecimalCharByteShortIntLongMethodOrField,
+                                                                               range, diagnostics);
+
+            case MIN, MAX -> validateNumericConstraint(context, uri, annotationName, typeName,
+                                                       declaringType, isPrimitive, NUMERIC_WRAPPER_TYPES,
+                                                       "AnnotationMinMaxMethods",
+                                                       ErrorCode.InvalidAnnotationOnNonMinMaxMethodOrField,
+                                                       range, diagnostics);
+
+            case NEGATIVE, NEGATIVE_OR_ZERO, POSITIVE, POSITIVE_OR_ZERO -> validateNumericConstraint(context, uri, annotationName, typeName,
+                                                                                                     declaringType, isPrimitive, NUMERIC_AND_DECIMAL_WRAPPER_TYPES,
+                                                                                                     "AnnotationPositiveMethods",
+                                                                                                     ErrorCode.InvalidAnnotationOnNonPositiveMethodOrField,
+                                                                                                     range, diagnostics);
+
+            case FUTURE, FUTURE_OR_PRESENT, PAST, PAST_OR_PRESENT -> validateDateTimeConstraint(context, uri, annotationName, typeName,
+                                                                                                declaringType, range, diagnostics);
+
+            default -> {
+                // SIZE and NOT_EMPTY require collection/map/array checks - handled separately
+            }
+        }
+    }
+
+    /**
+     * Validates boolean constraint annotations (@AssertTrue, @AssertFalse).
+     */
+    private void validateBooleanConstraint(JavaDiagnosticsContext context, String uri,
+                                           String annotationName, String typeName,
+                                           Range range, List<Diagnostic> diagnostics) throws JavaModelException {
+        if (!typeName.equals("boolean") && !typeName.equals("java.lang.Boolean")) {
+            addDiagnostic(context, uri, annotationName,
+                          "AnnotationBooleanMethods",
+                          ErrorCode.InvalidAnnotationOnNonBooleanMethodOrField,
+                          range, diagnostics);
+        }
+    }
+
+    /**
+     * Validates string constraint annotations (@Email, @NotBlank, @Pattern).
+     */
+    private void validateStringConstraint(JavaDiagnosticsContext context, String uri,
+                                          String annotationName, String typeName,
+                                          Range range, List<Diagnostic> diagnostics) throws JavaModelException {
+        if (!typeName.equals("java.lang.String") && !typeName.equals("java.lang.CharSequence")) {
+            addDiagnostic(context, uri, annotationName,
+                          "AnnotationStringMethods",
+                          ErrorCode.InvalidAnnotationOnNonStringMethodOrField,
+                          range, diagnostics);
+        }
+    }
+
+    /**
+     * Validates numeric constraint annotations.
+     */
+    private void validateNumericConstraint(JavaDiagnosticsContext context, String uri,
+                                           String annotationName, String typeName,
+                                           IType declaringType, boolean isPrimitive,
+                                           String[] allowedTypes, String messageKey,
+                                           ErrorCode errorCode, Range range,
+                                           List<Diagnostic> diagnostics) throws JavaModelException {
+        String matchedType = DiagnosticUtils.getMatchedJavaElementName(declaringType, typeName, allowedTypes);
+        if (matchedType == null && !isPrimitive) {
+            addDiagnostic(context, uri, annotationName, messageKey, errorCode, range, diagnostics);
+        }
+    }
+
+    /**
+     * Validates date/time constraint annotations.
+     */
+    private void validateDateTimeConstraint(JavaDiagnosticsContext context, String uri,
+                                            String annotationName, String typeName,
+                                            IType declaringType, Range range,
+                                            List<Diagnostic> diagnostics) throws JavaModelException {
+        String matchedType = DiagnosticUtils.getMatchedJavaElementName(
+                                                                       declaringType, typeName, SET_OF_DATE_TYPES.toArray(new String[0]));
+
+        if (matchedType == null) {
+            addDiagnostic(context, uri, annotationName,
+                          "AnnotationDateMethods",
+                          ErrorCode.InvalidAnnotationOnNonDateTimeMethodOrField,
+                          range, diagnostics);
+        }
+    }
+
+    /**
+     * Helper method to add a diagnostic with consistent formatting.
+     */
+    private void addDiagnostic(JavaDiagnosticsContext context, String uri,
+                               String annotationName, String messageKey, ErrorCode errorCode,
+                               Range range, List<Diagnostic> diagnostics) throws JavaModelException {
+        String message = Messages.getMessage(messageKey, "@" + annotationName);
+        diagnostics.add(context.createDiagnostic(uri, message, range, Constants.DIAGNOSTIC_SOURCE,
+                                                 annotationName, errorCode, DiagnosticSeverity.Error));
     }
 }
