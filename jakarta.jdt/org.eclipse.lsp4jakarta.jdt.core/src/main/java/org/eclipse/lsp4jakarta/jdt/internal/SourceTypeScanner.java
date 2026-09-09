@@ -89,7 +89,7 @@ public class SourceTypeScanner {
     public static void scanSourceTypes(IJavaProject javaProject, TypeVisitor visitor) {
         try {
             for (IPackageFragmentRoot root : javaProject.getPackageFragmentRoots()) {
-                if (root.getKind() != IPackageFragmentRoot.K_SOURCE) {
+                if (root == null || IPackageFragmentRoot.K_SOURCE != root.getKind()) {
                     continue;
                 }
                 for (IJavaElement child : root.getChildren()) {

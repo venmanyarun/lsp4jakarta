@@ -138,7 +138,7 @@ public class PersistenceBidirectionalDiagnosticsParticipant implements IJavaDiag
             if (hasMappedBy) {
                 // This member is explicitly declared as the inverse side.
                 // Rule 2: @JoinTable must not be present on the inverse side.
-                if (DiagnosticUtils.getMatchedAnnotation(unit, annotations, Constants.JOIN_TABLE) != null) {
+                if (DiagnosticUtils.isMatchedAnnotation(unit, annotations, Constants.JOIN_TABLE)) {
                     Range range = PositionUtils.toNameRange(member, context.getUtils());
                     diagnostics.add(context.createDiagnostic(context.getUri(),
                                                              Messages.getMessage("JoinTableOnInverseSide"),
@@ -202,42 +202,56 @@ public class PersistenceBidirectionalDiagnosticsParticipant implements IJavaDiag
         String declaringSimpleName = declaringType.getElementName();
 
         for (IField field : targetType.getFields()) {
-            IAnnotation annotation = DiagnosticUtils.getMatchedAnnotation(
-                                                                          targetUnit, field.getAnnotations(), mirroredAnnotation);
-            if (annotation != null) {
-                if (requiresMappedByOnTarget) {
-                    String mappedByValue = DiagnosticUtils.getAnnotationMemberValue(
-                                                                                    annotation, Constants.MAPPED_BY, String.class);
-                    if (mappedByValue == null || mappedByValue.isEmpty()) {
-                        continue;
-                    }
-                }
-                if (declaringSimpleName.equals(
-                                               DiagnosticUtils.getElementTypeSimpleName(field.getTypeSignature()))) {
-                    return true;
-                }
+            if (hasMirroredBackReference(field, targetUnit, mirroredAnnotation,
+                                         requiresMappedByOnTarget, declaringSimpleName)) {
+                return true;
             }
         }
 
         for (IMethod method : targetType.getMethods()) {
-            IAnnotation annotation = DiagnosticUtils.getMatchedAnnotation(
-                                                                          targetUnit, method.getAnnotations(), mirroredAnnotation);
-            if (annotation != null) {
-                if (requiresMappedByOnTarget) {
-                    String mappedByValue = DiagnosticUtils.getAnnotationMemberValue(
-                                                                                    annotation, Constants.MAPPED_BY, String.class);
-                    if (mappedByValue == null || mappedByValue.isEmpty()) {
-                        continue;
-                    }
-                }
-                if (declaringSimpleName.equals(
-                                               DiagnosticUtils.getElementTypeSimpleName(method.getReturnType()))) {
-                    return true;
-                }
+            if (hasMirroredBackReference(method, targetUnit, mirroredAnnotation,
+                                         requiresMappedByOnTarget, declaringSimpleName)) {
+                return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * Returns {@code true} when {@code member} carries the given {@code mirroredAnnotation}
+     * and its declared type matches {@code declaringSimpleName}.
+     *
+     * <p>When {@code requiresMappedByOnTarget} is {@code true} (self-mirroring annotations
+     * such as {@code @OneToOne} and {@code @ManyToMany}), the annotation must also have a
+     * non-empty {@code mappedBy} attribute to confirm the member is explicitly the inverse side.
+     *
+     * @param member the field or method to inspect
+     * @param unit the compilation unit that owns {@code member}
+     * @param mirroredAnnotation the fully-qualified annotation to look for
+     * @param requiresMappedByOnTarget whether a non-empty {@code mappedBy} is required
+     * @param declaringSimpleName the simple name of the declaring entity type
+     * @return {@code true} if this member is a matching back-reference
+     * @throws JavaModelException if the JDT model cannot be accessed
+     */
+    private boolean hasMirroredBackReference(IMember member, ICompilationUnit unit,
+                                             String mirroredAnnotation,
+                                             boolean requiresMappedByOnTarget,
+                                             String declaringSimpleName) throws JavaModelException {
+        IAnnotation[] annotations = member instanceof IField ? ((IField) member).getAnnotations() : ((IMethod) member).getAnnotations();
+        IAnnotation annotation = DiagnosticUtils.getMatchedAnnotation(unit, annotations, mirroredAnnotation);
+        if (annotation == null) {
+            return false;
+        }
+        if (requiresMappedByOnTarget) {
+            String mappedByValue = DiagnosticUtils.getAnnotationMemberValue(
+                                                                            annotation, Constants.MAPPED_BY, String.class);
+            if (mappedByValue == null || mappedByValue.isEmpty()) {
+                return false;
+            }
+        }
+        String typeSignature = member instanceof IField ? ((IField) member).getTypeSignature() : ((IMethod) member).getReturnType();
+        return declaringSimpleName.equals(DiagnosticUtils.getElementTypeSimpleName(typeSignature));
     }
 
     /**
